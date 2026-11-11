@@ -1,0 +1,7 @@
+SDA (SS/CS) -	D5
+SCK -	D18
+MOSI -	D23
+MISO -	D19
+RST	- D22
+3.3V - 3V3 (nunca 5V)
+GND	- GND
