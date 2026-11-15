@@ -1,7 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +6,575 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ─────────────────────────────── ENUMS ──────────────────────────────────────
+
+enum TipoUsuario {
+  ESTUDANTE
+  VISITANTE 
+  ADMIN 
+}
+
+enum StatusCarteirinha {
+  ATIVA
+  BLOQUEADA
+  PERDIDA
+  CANCELADA
+}
+
+enum TipoMovimentacao {
+  CREDITO_RECARGA // entrada de créditos após Pix confirmado
+  ESTORNO // devolução/reversão de uma recarga
+  AJUSTE_MANUAL // correção feita por um administrador
+}
+
+enum TipoCompra {
+  RECARGA_CREDITO // estudante adiciona créditos ao saldo
+  REFEICAO_VISITANTE // visitante compra uma refeição/vale (gera passe)
+}
+
+enum StatusCompra {
+  PENDENTE // criada, aguardando pagamento
+  PAGA // pagamento confirmado pelo backend/provedor
+  EXPIRADA // não paga dentro do prazo
+  CANCELADA
+  ESTORNADA
+}
+
+enum MetodoPagamento {
+  PIX
+}
+
+enum StatusPagamento {
+  PENDENTE
+  CONFIRMADO
+  FALHOU
+  EXPIRADO
+  ESTORNADO
+}
+
+enum StatusPasse {
+  ATIVO // pago e ainda não usado; pode ser apresentado no totem
+  UTILIZADO // já resultou em uma tag entregue (uso único)
+  EXPIRADO
+  CANCELADO
+  BLOQUEADO // bloqueio manual/por suspeita de fraude
+}
+
+enum ResultadoTentativaSenha {
+  SUCESSO
+  SENHA_INVALIDA
+  SENHA_EXPIRADA
+  SENHA_JA_UTILIZADA
+  PAGAMENTO_NAO_CONFIRMADO
+  BLOQUEADO_POR_TENTATIVAS // rate limit atingido
+}
+
+enum StatusTotem {
+  ATIVO
+  INATIVO
+  MANUTENCAO
+  ERRO
+}
+
+enum FormatoTag {
+  CARTAO // cartão plano (magazine com comporta)
+  CHAVEIRO // tag de chaveiro (carrossel com compartimentos)
+}
+
+enum StatusTag {
+  DISPONIVEL // no dispenser, pronta para uso
+  RESERVADA // reservada para uma dispensação em andamento
+  EM_USO // entregue a um visitante
+  PRESA // travada no mecanismo
+  PERDIDA // não devolvida / extraviada
+  DANIFICADA
+  MANUTENCAO // fora de circulação (retirada para reposição/teste)
+}
+
+enum StatusDispensacao {
+  SOLICITADA // pedido criado a partir de um passe válido
+  TAG_RESERVADA // uma tag foi reservada para este pedido
+  ENVIADA_AO_TOTEM // ordem entregue ao ESP32
+  LIBERANDO // motor/servo acionado, aguardando sensor/RFID
+  ENTREGUE // tag liberada e confirmada
+  FALHA // falha mecânica ou de leitura; requer recuperação
+  CANCELADA
+  EXPIRADA // ordem não executada dentro do prazo
+}
+
+enum TipoEventoDispensacao {
+  SOLICITACAO_CRIADA
+  TAG_RESERVADA
+  ORDEM_ENVIADA
+  MOTOR_ACIONADO
+  SENSOR_PASSAGEM
+  RFID_LIDO
+  ENTREGA_CONFIRMADA
+  FALHA_MECANICA
+  FALHA_LEITURA_RFID
+  TIMEOUT
+  CANCELADA
+  RECUPERACAO_MANUAL
+}
+
+enum OrigemEvento {
+  BACKEND
+  TABLET
+  ESP32
+  ADMIN
+}
+
+enum StatusEmprestimo {
+  EM_USO
+  DEVOLVIDO
+  NAO_DEVOLVIDO
+  PERDIDO
+  DANIFICADO
+}
+
+enum ResultadoConsultaCarteirinha {
+  CREDITOS_CONFIRMADOS // conta possui créditos registrados
+  SEM_CREDITOS
+  CARTEIRINHA_DESCONHECIDA
+  CARTEIRINHA_BLOQUEADA
+}
+
+enum NivelLog {
+  INFO
+  AVISO
+  ERRO
+}
+
+// ═══════════════════════ 1. IDENTIDADE E ACESSO ═════════════════════════════
+
+model Usuario {
+  id        String      @id @default(uuid()) @db.Uuid
+  tipo      TipoUsuario
+  nome      String
+  email     String?     @unique
+  telefone  String?
+  cpf       String?     @unique // opcional; exigir só se o provedor Pix pedir
+  matricula String?     @unique // estudantes
+  senhaHash String? // hash (argon2/bcrypt) da senha do app; nulo para visitante sem conta
+  ativo     Boolean     @default(true)
+  criadoEm  DateTime    @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  sessoes      SessaoUsuario[]
+  carteirinhas Carteirinha[]
+  conta        ContaCredito?
+  compras      Compra[]
+  passes       Passe[]
+
+  @@index([tipo])
+  @@map("usuarios")
+}
+
+/// Sessões de login (refresh tokens) do aplicativo.
+/// Serve para: manter o usuário logado, permitir revogar sessões e auditar
+/// dispositivos. Guarda apenas o HASH do token, nunca o token em si.
+model SessaoUsuario {
+  id               String    @id @default(uuid()) @db.Uuid
+  usuarioId        String    @db.Uuid
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipOrigem         String?
+  expiraEm         DateTime
+  revogadoEm       DateTime?
+  criadoEm         DateTime  @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([expiraEm])
+  @@map("sessoes_usuario")
+}
+
+/// Carteirinha RFID do estudante (cartão físico já existente na universidade).
+/// Serve para: o totem identificar o estudante pelo UID lido e consultar se os
+/// créditos comprados estão registrados. Um usuário pode ter várias ao longo do
+/// tempo (2ª via, troca), mas o UID é único no sistema.
+model Carteirinha {
+  id        String            @id @default(uuid()) @db.Uuid
+  usuarioId String            @db.Uuid
+  uidRfid   String            @unique // identificador lido pelo leitor RFID
+  status    StatusCarteirinha @default(ATIVA)
+  criadoEm  DateTime          @default(now())
+  atualizadoEm DateTime       @updatedAt
+
+  usuario   Usuario               @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  consultas ConsultaCarteirinha[]
+
+  @@index([usuarioId])
+  @@map("carteirinhas")
+}
+
+// ═════════════════════════ 2. FINANCEIRO ════════════════════════════════════
+
+/// Conta de créditos do estudante (1 por usuário).
+/// Serve para: mostrar o saldo atual no app e no totem de forma rápida.
+/// O saldo é um valor derivado: a verdade está em `movimentacoes`. Atualizar
+/// sempre na MESMA transação que insere a movimentação.
+/// Recomendado (SQL na migration): CHECK ("saldoCentavos" >= 0).
+model ContaCredito {
+  id            String   @id @default(uuid()) @db.Uuid
+  usuarioId     String   @unique @db.Uuid
+  saldoCentavos Int      @default(0)
+  atualizadoEm  DateTime @updatedAt
+  criadoEm      DateTime @default(now())
+
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  movimentacoes Movimentacao[]
+
+  @@map("contas_credito")
+}
+
+/// Extrato (ledger) imutável de tudo que altera o saldo.
+/// Serve para: histórico exibido no app, auditoria e conciliação do saldo.
+/// Nunca editar/apagar linhas; correções entram como novas linhas (ESTORNO ou
+/// AJUSTE_MANUAL). `valorCentavos` é com sinal (+ crédito, − débito).
+/// O par (compraId, tipo) único garante que uma recarga credite UMA só vez,
+/// mesmo que o webhook do Pix seja reenviado.
+model Movimentacao {
+  id                String           @id @default(uuid()) @db.Uuid
+  contaId           String           @db.Uuid
+  tipo              TipoMovimentacao
+  valorCentavos     Int // com sinal
+  saldoAposCentavos Int // saldo da conta logo após esta movimentação
+  compraId          String?          @db.Uuid
+  descricao         String?
+  criadoEm          DateTime         @default(now())
+
+  conta  ContaCredito @relation(fields: [contaId], references: [id], onDelete: Restrict)
+  compra Compra?      @relation(fields: [compraId], references: [id], onDelete: Restrict)
+
+  @@unique([compraId, tipo])
+  @@index([contaId, criadoEm])
+  @@map("movimentacoes")
+}
+
+/// Catálogo de itens vendáveis ao público externo (ex.: "Refeição avulsa").
+/// Serve para: definir preço e validade do passe sem fixar valores no código.
+/// Recargas de estudante não usam produto (valor livre escolhido no app).
+model Produto {
+  id              String   @id @default(uuid()) @db.Uuid
+  nome            String
+  descricao       String?
+  valorCentavos   Int
+  validadePasseMin Int     @default(120) // minutos de validade do passe após o pagamento
+  ativo           Boolean  @default(true)
+  criadoEm        DateTime @default(now())
+  atualizadoEm    DateTime @updatedAt
+
+  compras Compra[]
+
+  @@map("produtos")
+}
+
+/// Intenção de compra (pedido) feita no app.
+/// Serve para: ligar "o que o usuário quer comprar" ao(s) pagamento(s) e ao
+/// resultado (movimentação de crédito OU passe de retirada). Uma compra pode
+/// ter várias tentativas de pagamento (ex.: Pix expirou e foi gerado outro).
+model Compra {
+  id            String       @id @default(uuid()) @db.Uuid
+  usuarioId     String       @db.Uuid
+  tipo          TipoCompra
+  produtoId     String?      @db.Uuid // só para REFEICAO_VISITANTE
+  valorCentavos Int
+  status        StatusCompra @default(PENDENTE)
+  expiraEm      DateTime? // prazo para pagar
+  pagaEm        DateTime?
+  criadoEm      DateTime     @default(now())
+  atualizadoEm  DateTime     @updatedAt
+
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  produto       Produto?       @relation(fields: [produtoId], references: [id], onDelete: Restrict)
+  pagamentos    Pagamento[]
+  movimentacoes Movimentacao[]
+  passe         Passe?
+
+  @@index([usuarioId, criadoEm])
+  @@index([status])
+  @@map("compras")
+}
+
+/// Cobrança Pix gerada para uma compra e seu estado no provedor.
+/// Serve para: acompanhar PENDENTE → CONFIRMADO, guardar o id externo (txid) e
+/// o "copia e cola" mostrado no app. Créditos/passes só são liberados quando
+/// o status vira CONFIRMADO via confirmação confiável do provedor.
+/// `simulado = true` marca pagamentos fictícios usados na demonstração.
+model Pagamento {
+  id               String          @id @default(uuid()) @db.Uuid
+  compraId         String          @db.Uuid
+  provedor         String // ex.: "SIMULADO", "MERCADO_PAGO", "EFI"
+  idExterno        String? // txid / id da cobrança no provedor
+  metodo           MetodoPagamento @default(PIX)
+  status           StatusPagamento @default(PENDENTE)
+  valorCentavos    Int
+  pixCopiaECola    String?
+  expiraEm         DateTime?
+  confirmadoEm     DateTime?
+  simulado         Boolean         @default(false)
+  payloadProvedor  Json? // resposta bruta do provedor (depuração/auditoria)
+  criadoEm         DateTime        @default(now())
+  atualizadoEm     DateTime        @updatedAt
+
+  compra  Compra                  @relation(fields: [compraId], references: [id], onDelete: Restrict)
+  eventos EventoWebhookPagamento[]
+
+  @@unique([provedor, idExterno])
+  @@index([compraId])
+  @@index([status])
+  @@map("pagamentos")
+}
+
+/// Registro bruto de cada webhook recebido do provedor de pagamento.
+/// Serve para: IDEMPOTÊNCIA (o par provedor + idEventoExterno é único, então
+/// reenvios são ignorados), validar assinatura e reprocessar/auditar falhas.
+model EventoWebhookPagamento {
+  id              String    @id @default(uuid()) @db.Uuid
+  provedor        String
+  idEventoExterno String
+  tipo            String
+  pagamentoId     String?   @db.Uuid
+  payload         Json
+  assinaturaValida Boolean  @default(false)
+  processadoEm    DateTime?
+  erro            String?
+  recebidoEm      DateTime  @default(now())
+
+  pagamento Pagamento? @relation(fields: [pagamentoId], references: [id], onDelete: SetNull)
+
+  @@unique([provedor, idEventoExterno])
+  @@index([pagamentoId])
+  @@map("eventos_webhook_pagamento")
+}
+
+// ═══════════════════ 3. CREDENCIAL DO VISITANTE (SENHA) ═════════════════════
+
+/// Passe de retirada de tag, criado após a confirmação do pagamento de uma
+/// refeição de visitante (1 passe por compra).
+/// Serve para: ser a "autorização" que o visitante apresenta no totem digitando
+/// a SENHA TEMPORÁRIA exibida no app. Uso único, com validade (`expiraEm`).
+/// `senha` é um código curto (sugestão: 8 caracteres sem ambíguos 0/O/1/I),
+/// único no sistema; se gerar colisão, o backend sorteia outra.
+model Passe {
+  id          String      @id @default(uuid()) @db.Uuid
+  compraId    String      @unique @db.Uuid
+  usuarioId   String      @db.Uuid
+  senha       String      @unique
+  status      StatusPasse @default(ATIVO)
+  expiraEm    DateTime
+  utilizadoEm DateTime?
+  criadoEm    DateTime    @default(now())
+  atualizadoEm DateTime   @updatedAt
+
+  compra      Compra          @relation(fields: [compraId], references: [id], onDelete: Restrict)
+  usuario     Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  dispensacoes Dispensacao[]
+  emprestimos EmprestimoTag[]
+  tentativas  TentativaSenha[]
+
+  @@index([usuarioId])
+  @@index([status, expiraEm])
+  @@map("passes")
+}
+
+/// Histórico de cada senha digitada no totem (certa ou errada).
+/// Serve para: limitar tentativas/bloquear temporariamente (a senha curta é
+/// adivinhável) — o rate limit é feito por totem e por IP, já que uma senha
+/// errada não pertence a nenhum passe — e para auditar abusos.
+model TentativaSenha {
+  id        String                  @id @default(uuid()) @db.Uuid
+  totemId   String?                 @db.Uuid
+  passeId   String?                 @db.Uuid // preenchido só se a senha existir
+  ipOrigem  String?
+  resultado ResultadoTentativaSenha
+  criadoEm  DateTime                @default(now())
+
+  totem Totem? @relation(fields: [totemId], references: [id], onDelete: SetNull)
+  passe Passe? @relation(fields: [passeId], references: [id], onDelete: SetNull)
+
+  @@index([totemId, criadoEm])
+  @@index([ipOrigem, criadoEm])
+  @@index([passeId])
+  @@map("tentativas_senha")
+}
+
+// ═════════════════════════ 4. HARDWARE / TOTEM ══════════════════════════════
+
+/// Equipamento físico (tablet + ESP32 + dispenser + leitor RFID) como uma
+/// unidade lógica.
+/// Serve para: autenticar o totem na API (`apiKeyHash` — guarda só o hash da
+/// chave gravada no firmware), saber se está online (`ultimoContatoEm`) e
+/// amarrar tags, dispensações e logs a um equipamento específico.
+model Totem {
+  id              String      @id @default(uuid()) @db.Uuid
+  nome            String      @unique
+  localizacao     String?
+  status          StatusTotem @default(ATIVO)
+  apiKeyHash      String      @unique
+  firmwareVersao  String?
+  ultimoContatoEm DateTime?
+  criadoEm        DateTime    @default(now())
+  atualizadoEm    DateTime    @updatedAt
+
+  tags         Tag[]
+  dispensacoes Dispensacao[]
+  tentativas   TentativaSenha[]
+  consultas    ConsultaCarteirinha[]
+  logs         LogTotem[]
+
+  @@map("totens")
+}
+
+/// Estoque de tags RFID temporárias entregues aos visitantes.
+/// Serve para: saber quais tags existem, onde estão (qual totem/posição do
+/// carrossel ou magazine) e seu estado (disponível, reservada, em uso, presa,
+/// perdida...). O `uidRfid` permite conferir, via leitor, que a tag liberada
+/// é mesmo a reservada.
+model Tag {
+  id          String     @id @default(uuid()) @db.Uuid
+  uidRfid     String     @unique
+  codigo      String?    @unique // número impresso/etiqueta para controle humano
+  formato     FormatoTag
+  status      StatusTag  @default(DISPONIVEL)
+  totemId     String?    @db.Uuid
+  posicao     Int? // compartimento/posição no dispenser
+  observacao  String?
+  criadoEm    DateTime   @default(now())
+  atualizadoEm DateTime  @updatedAt
+
+  totem        Totem?          @relation(fields: [totemId], references: [id], onDelete: SetNull)
+  dispensacoes Dispensacao[]
+  emprestimos  EmprestimoTag[]
+
+  @@unique([totemId, posicao])
+  @@index([status])
+  @@map("tags")
+}
+
+/// Pedido ÚNICO de liberação de uma tag, criado quando um passe válido é
+/// apresentado. É o coração do fluxo físico (seção 5 do planejamento).
+/// Serve para: reservar a tag ANTES de acionar o motor, controlar o estado
+/// da operação e impedir liberação dupla. `chaveIdempotencia` é única: se o
+/// tablet/ESP32 repetir a requisição, a API devolve a mesma dispensação em vez
+/// de criar outra. Falha mecânica deixa o status FALHA para recuperação.
+/// Recomendado (SQL na migration): índice único parcial em ("passeId") WHERE
+/// status = 'ENTREGUE' — garante no máximo UMA entrega por passe.
+model Dispensacao {
+  id                String            @id @default(uuid()) @db.Uuid
+  passeId           String            @db.Uuid
+  totemId           String            @db.Uuid
+  tagId             String?           @db.Uuid // preenchido ao reservar
+  chaveIdempotencia String            @unique
+  status            StatusDispensacao @default(SOLICITADA)
+  uidLido           String? // UID efetivamente lido pelo RFID na entrega
+  motivoFalha       String?
+  expiraEm          DateTime // prazo da ordem para o ESP32 executar
+  solicitadaEm      DateTime          @default(now())
+  concluidaEm       DateTime?
+  atualizadoEm      DateTime          @updatedAt
+
+  passe      Passe                 @relation(fields: [passeId], references: [id], onDelete: Restrict)
+  totem      Totem                 @relation(fields: [totemId], references: [id], onDelete: Restrict)
+  tag        Tag?                  @relation(fields: [tagId], references: [id], onDelete: Restrict)
+  eventos    EventoDispensacao[]
+  emprestimo EmprestimoTag?
+
+  @@index([passeId])
+  @@index([tagId])
+  @@index([totemId, status])
+  @@index([status, expiraEm])
+  @@map("dispensacoes")
+}
+
+/// Linha do tempo detalhada de cada dispensação (append-only).
+/// Serve para: registrar separadamente reserva, ordem, acionamento do motor,
+/// sensor, leitura RFID, entrega e falhas — base de auditoria, depuração e
+/// das métricas de avaliação do protótipo (tempo de atendimento, taxa de
+/// dispensação correta).
+model EventoDispensacao {
+  id            String                @id @default(uuid()) @db.Uuid
+  dispensacaoId String                @db.Uuid
+  tipo          TipoEventoDispensacao
+  origem        OrigemEvento
+  uidRfid       String?
+  detalhes      Json?
+  criadoEm      DateTime              @default(now())
+
+  dispensacao Dispensacao @relation(fields: [dispensacaoId], references: [id], onDelete: Cascade)
+
+  @@index([dispensacaoId, criadoEm])
+  @@map("eventos_dispensacao")
+}
+
+/// Vínculo entre uma tag física e uma compra/passe durante o uso.
+/// Serve para: saber com quem está cada tag, quando foi entregue e devolvida
+/// (planejamento, seção 3.2 item 13) e tratar tags não devolvidas, perdidas ou
+/// danificadas. Mantém histórico: a mesma tag aparece em vários empréstimos.
+/// Recomendado (SQL na migration): índice único parcial em ("tagId") WHERE
+/// status = 'EM_USO' — uma tag só pode estar emprestada a uma pessoa por vez.
+model EmprestimoTag {
+  id            String           @id @default(uuid()) @db.Uuid
+  tagId         String           @db.Uuid
+  passeId       String           @db.Uuid
+  dispensacaoId String           @unique @db.Uuid
+  status        StatusEmprestimo @default(EM_USO)
+  entregueEm    DateTime         @default(now())
+  devolvidoEm   DateTime?
+  observacao    String?
+
+  tag         Tag         @relation(fields: [tagId], references: [id], onDelete: Restrict)
+  passe       Passe       @relation(fields: [passeId], references: [id], onDelete: Restrict)
+  dispensacao Dispensacao @relation(fields: [dispensacaoId], references: [id], onDelete: Restrict)
+
+  @@index([tagId, status])
+  @@index([passeId])
+  @@map("emprestimos_tag")
+}
+
+// ═════════════════════════ 5. AUDITORIA DO TOTEM ════════════════════════════
+
+/// Registro de cada leitura de carteirinha de estudante no totem.
+/// Serve para: auditar as consultas "meus créditos estão registrados?" Essa
+/// consulta NÃO debita refeição. Guarda o UID lido mesmo quando desconhecido
+/// (útil para detectar cartões inválidos) e o saldo no momento da consulta.
+model ConsultaCarteirinha {
+  id            String                       @id @default(uuid()) @db.Uuid
+  totemId       String                       @db.Uuid
+  carteirinhaId String?                      @db.Uuid // nulo se o UID não existir
+  uidLido       String
+  resultado     ResultadoConsultaCarteirinha
+  saldoCentavos Int? // saldo no momento da consulta
+  criadoEm      DateTime                     @default(now())
+
+  totem       Totem        @relation(fields: [totemId], references: [id], onDelete: Restrict)
+  carteirinha Carteirinha? @relation(fields: [carteirinhaId], references: [id], onDelete: SetNull)
+
+  @@index([totemId, criadoEm])
+  @@index([carteirinhaId])
+  @@map("consultas_carteirinha")
+}
+
+/// Logs operacionais do equipamento (heartbeat, erros de Wi-Fi, sensor, RFID,
+/// motor travado, backend indisponível).
+/// Serve para: diagnóstico remoto e auditoria de falhas fora do fluxo de uma
+/// dispensação específica (as desse fluxo ficam em `eventos_dispensacao`).
+model LogTotem {
+  id       String   @id @default(uuid()) @db.Uuid
+  totemId  String   @db.Uuid
+  nivel    NivelLog @default(INFO)
+  evento   String // ex.: "HEARTBEAT", "WIFI_PERDIDO", "SENSOR_FALHA"
+  mensagem String?
+  detalhes Json?
+  criadoEm DateTime @default(now())
+
+  totem Totem @relation(fields: [totemId], references: [id], onDelete: Cascade)
+
+  @@index([totemId, criadoEm])
+  @@index([nivel, criadoEm])
+  @@map("logs_totem")
 }
