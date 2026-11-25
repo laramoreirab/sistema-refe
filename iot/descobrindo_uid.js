@@ -1,8 +1,8 @@
 // 1. Configura a comunicação SPI com os pinos do ESP32
-SPI1.setup({ sck: D18, miso: D19, mosi: D23 });
+SPI1.setup({ sck: P18, miso: P19, mosi: P23 });
 
 // 2. Conecta o módulo MFRC522 usando o SPI e o pino CS (SDA)
-var rfid = require("MFRC522").connect(SPI1, D5);
+var rfid = require("MFRC522").connect(SPI1, P5);
 
 // 3. Converte o UID (lista de bytes) em texto hexadecimal, ex: "A1:B2:C3:D4"
 function uidParaTexto(uid) {
