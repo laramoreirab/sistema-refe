@@ -1,26 +1,58 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f6f3ea;
+  --foreground: #143028;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-cream: #f6f3ea;
+  --color-ink: #143028;
+  --color-muted: #5d7268;
+  --color-brand: #1b8f4c;
+  --color-brand-dark: #146b39;
+  --color-mint: #e4f3dc;
+  --color-sun: #f7d34b;
+  --color-peach: #fff0d2;
+  --color-warn: #9a5a10;
+  --color-danger: #d63b3b;
+  --font-sans: var(--font-nunito), "Nunito", sans-serif;
+  --font-hand: var(--font-caveat), "Caveat", cursive;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+@keyframes refill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-6px);
+  }
+  40%,
+  80% {
+    transform: translateX(6px);
+  }
+}
+
+.animate-refill {
+  animation: refill 5s linear forwards;
+}
+
+.animate-shake {
+  animation: shake 0.35s ease-in-out;
 }

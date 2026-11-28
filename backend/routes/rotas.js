@@ -1,9 +1,8 @@
-import { Router } from 'express'
-import authRotas from './authRotas.js'
+import { Router } from 'express';
+import rotasTotem from './rotasTotem.js';
 
-const router = Router()
+// Roteador intermediário: agrupa os recursos da API sob /totem.
+const router = Router();
+router.use('/totem', rotasTotem);
 
-
-
-
-export default router
+export default router;

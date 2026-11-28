@@ -1,7 +1,8 @@
-SDA (SS/CS) -	D5
-SCK -	D18
-MOSI -	D23
-MISO -	D19
-RST	- D22
+﻿SDA (SS/CS) - D5 / GPIO 5
+SCK - D18 / GPIO 18
+MOSI - D23 / GPIO 23
+MISO - D19 / GPIO 19
+RST - D22 / GPIO 22
 3.3V - 3V3 (nunca 5V)
-GND	- GND
+GND - GND
+PINO_ATUADOR - GPIO 26 (entrada de módulo/driver externo; ajustar ao dispenser)
